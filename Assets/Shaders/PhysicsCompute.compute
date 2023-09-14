@@ -1,0 +1,71 @@
+#include "HLSLSupport.cginc"
+
+#pragma kernel ComputeVelocity
+#pragma kernel ComputePosition
+
+struct PhysicsData
+{
+	float mass;
+	float3 pos;
+	float3 vel;
+	float homingFactor;
+	float homingStrength;
+	float3 homingPos;
+};
+
+RWStructuredBuffer<PhysicsData> physDatas;
+int numObjs;
+
+float deltaTime;
+int numSteps;
+
+float adjustLerpPercentage(float percentage)
+{
+	return exp(log(percentage) / numSteps);
+}
+
+[numthreads(64, 1, 1)]
+void ComputeVelocity(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= numObjs) {
+		return;
+	}
+
+	PhysicsData thisPhysData = physDatas[id.x];
+	float3 dVel = float3(0, 0, 0);
+	float3 orbitVel = float3(0, 0, 0);
+	float orbitVelWeight = 0;
+	for (int j = 0; j < numObjs; ++j) {
+		PhysicsData otherPhysData = physDatas[j];
+
+		float3 r = otherPhysData.pos - thisPhysData.pos;
+		// float3 F = thisPhysData.mass * otherPhysData.mass / dot(r, r);
+		float r2 = dot(r, r);
+		if (r2 == 0) {
+			continue;
+		}
+		float3 a = otherPhysData.mass / max(r2, 0.1) * normalize(r);
+		dVel += a * deltaTime;
+
+		float currentOrbitVelWeight = otherPhysData.mass / thisPhysData.mass;
+		orbitVel += sqrt(otherPhysData.mass / sqrt(r2)) * normalize(cross(thisPhysData.pos - otherPhysData.pos, float3(0, 0, 1))) * currentOrbitVelWeight * currentOrbitVelWeight;
+		orbitVelWeight += currentOrbitVelWeight;
+	}
+
+	float3 newVel = thisPhysData.vel + dVel;
+
+	// newVel = lerp(newVel, orbitVel / orbitVelWeight, adjustLerpPercentage(0.5));
+	newVel = lerp(newVel, (thisPhysData.homingPos - thisPhysData.pos) * thisPhysData.homingStrength, (adjustLerpPercentage(thisPhysData.homingFactor)).xxx);
+
+	physDatas[id.x].vel = newVel;
+}
+
+[numthreads(64, 1, 1)]
+void ComputePosition(uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= numObjs) {
+		return;
+	}
+
+	physDatas[id.x].pos += physDatas[id.x].vel * deltaTime;
+}
